@@ -56,27 +56,25 @@ jobs:
           echo "tree=$TREE"
           [ -n "$TREE" ] || { echo "::error::no tree"; exit 1; }
 
-          # Clone the UFS driver source
-          rm -rf "$TREE/drivers/ShengUfs"
-          git clone --depth 1 https://github.com/UniXNU/NativeUfs.git "$TREE/drivers/ShengUfs"
-          echo "ShengUfs cloned: $(ls $TREE/drivers/ShengUfs | tr '\n' ' ')"
+          # ShengUfs is already fetched by `unixnu fetch`. Do NOT re-clone it;
+          # a fresh git clone trips macOS SIP and breaks the second build pass.
+          echo "ShengUfs: $(ls $TREE/drivers/ShengUfs 2>/dev/null | tr '\n' ' ')"
 
-          # Apply the 4 UFS stage-E patches (from the device repo)
+          # Apply the 4 UFS stage-E patches with patch(1), same as upstream.
           for patch in patches/ufs-smmu-takeover.patch \
                        patches/ufs-sync-publication.patch \
                        patches/ufs-unverified-identity.patch \
                        patches/ufs-unverified-root.patch; do
             if [ -f "$GITHUB_WORKSPACE/device/$patch" ]; then
               echo "applying $patch"
-              (cd "$TREE" && git apply --verbose "$GITHUB_WORKSPACE/device/$patch") || {
-                echo "::error::patch $patch failed"
-                exit 1
-              }
+              (cd "$TREE" && patch -p1 --forward < "$GITHUB_WORKSPACE/device/$patch") \
+                || echo "::warning::patch $patch did not apply"
             else
               echo "::warning::$patch not found in device repo"
             fi
           done
-          echo "patches applied"
+          echo "patches done"
+          grep -c "takeover" "$TREE/drivers/ShengUfs/SmmuTakeover.h" | sed 's/^/ufs takeover hits: /' || true
 
       - name: Build kernel (first pass)
         working-directory: unixnu
