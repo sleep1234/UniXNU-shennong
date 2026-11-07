@@ -1,0 +1,199 @@
+name: shennong stage E (kernel + root image)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  stage-e:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      UNIXNU_DEVICE: ${{ github.workspace }}/device
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out UniXNU (pinned to the last successful iPadOS 17.7.11 build)
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: c740efb5b23e94453bb179f7801eb592baafacf6
+          path: unixnu
+          submodules: recursive
+      - name: Check out the device repository
+        uses: actions/checkout@v4
+        with:
+          path: device
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install host tools
+        run: |
+          brew install llvm lld mtools dtc bison flex
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          if ! command -v unifdef >/dev/null; then brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; fi
+      - name: Install the board OS profile
+        run: |
+          mkdir -p unixnu/profiles/os
+          cp -r device/profiles/os/* unixnu/profiles/os/ 2>/dev/null || true
+          ls unixnu/profiles/os
+      - name: Fetch device modules
+        working-directory: unixnu
+        run: ./unixnu fetch -D "$UNIXNU_DEVICE"
+      - name: Defconfig
+        working-directory: unixnu
+        run: ./unixnu defconfig shennong_defconfig -D "$UNIXNU_DEVICE"
+      - name: Tree assembly (first pass)
+        working-directory: unixnu
+        run: ./unixnu tree -D "$UNIXNU_DEVICE" > /tmp/tree.log 2>&1 || { tail -50 /tmp/tree.log; exit 1; }
+
+      - name: Clone and patch ShengUfs (stage-E unverified UFS bring-up)
+        working-directory: unixnu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          TREE=$(ls -d out/shennong/*/shennong/tree 2>/dev/null | head -1)
+          echo "tree=$TREE"
+          [ -n "$TREE" ] || { echo "::error::no tree"; exit 1; }
+
+          # Clone the UFS driver source
+          rm -rf "$TREE/drivers/ShengUfs"
+          git clone --depth 1 https://github.com/UniXNU/NativeUfs.git "$TREE/drivers/ShengUfs"
+          echo "ShengUfs cloned: $(ls $TREE/drivers/ShengUfs | tr '\n' ' ')"
+
+          # Apply the 4 UFS stage-E patches (from the device repo)
+          for patch in patches/ufs-smmu-takeover.patch \
+                       patches/ufs-sync-publication.patch \
+                       patches/ufs-unverified-identity.patch \
+                       patches/ufs-unverified-root.patch; do
+            if [ -f "$GITHUB_WORKSPACE/device/$patch" ]; then
+              echo "applying $patch"
+              (cd "$TREE" && git apply --verbose "$GITHUB_WORKSPACE/device/$patch") || {
+                echo "::error::patch $patch failed"
+                exit 1
+              }
+            else
+              echo "::warning::$patch not found in device repo"
+            fi
+          done
+          echo "patches applied"
+
+      - name: Build kernel (first pass)
+        working-directory: unixnu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          SRC_SCRIPT=scripts/build-xnu-4k-baseline.sh
+          # Force-load storage bindings + VerifiedRoot archives
+          python3 - "$SRC_SCRIPT" <<'PY'
+          import sys
+          from pathlib import Path
+          script = Path(sys.argv[1])
+          text = script.read_text()
+          if 'libStorageBindings.a' in text:
+              print('storage archive link patch: already present')
+          else:
+              anchor = '  KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES ${XNU_EXTRA_LD_ARCHIVES:-}"'
+              if anchor not in text:
+                  print('::error::storage archive link patch: anchor not found')
+              else:
+                  inject = ('  for _extra in "$ROOT/build/verified-root/libVerifiedRoot.a" '
+                            '"$ROOT/build/io-storage-family/libStorageBindings.a"; do\n'
+                            '    [ -f "$_extra" ] && KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES -Wl,-force_load,$_extra"\n'
+                            '  done\n')
+                  script.write_text(text.replace(anchor, inject + anchor, 1))
+                  print('storage archive link patch: applied')
+          PY
+          # Build kernel
+          if ./unixnu build kernel -D "$UNIXNU_DEVICE"; then
+            echo "kernel first pass OK"
+          else
+            echo "::warning::kernel first pass failed (expected for storage bindings)"
+          fi
+
+      - name: Download and extract IPSW
+        working-directory: unixnu
+        run: |
+          IP=out/ipsw/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+          mkdir -p out/ipsw
+          if [ ! -f "$IP" ]; then
+            echo "downloading IPSW (6.84 GiB)..."
+            curl -sL --max-time 3600 -o "$IP" \
+              "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw" \
+              || { echo "::error::IPSW download failed"; exit 1; }
+          fi
+          ls -l "$IP"
+
+      - name: Build storage bindings
+        working-directory: unixnu
+        run: |
+          TREE=$(ls -d out/shennong/*/shennong/tree 2>/dev/null | head -1)
+          IP=out/ipsw/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+          pip3 install --quiet pyliblzfse || true
+          # Scan prelink storage bindings
+          python3 "$GITHUB_WORKSPACE/device/scripts/scan-prelink-storage.py" \
+            --ipsw "$IP" --device-class j120ap --tree "$TREE" \
+            --output /tmp/prelink-storage-bindings.json || echo "scan had issues"
+          python3 "$GITHUB_WORKSPACE/device/scripts/apply-prelink-slide.py" \
+            --bindings /tmp/prelink-storage-bindings.json \
+            --board "$GITHUB_WORKSPACE/device/board.toml" || true
+
+      - name: Build kernel (second pass with bindings)
+        working-directory: unixnu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          TREE=$(ls -d out/shennong/*/shennong/tree 2>/dev/null | head -1)
+          ./unixnu build kernel -D "$UNIXNU_DEVICE" > /tmp/pass2.log 2>&1 || {
+            echo "::error::kernel second pass failed"
+            tail -40 /tmp/pass2.log
+          }
+          # Check for kernel.macho output
+          KM=$(ls -t "$TREE"/../kernel/kernel.macho 2>/dev/null | head -1) || \
+          KM=$(ls -t out/shennong/*/shennong/kernel/kernel.macho 2>/dev/null | head -1) || true
+          echo "kernel.macho: ${KM:-not found}"
+          [ -n "$KM" ] && ls -l "$KM"
+
+      - name: Build userdata root image
+        working-directory: unixnu
+        run: |
+          set -eu
+          IP=out/ipsw/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+          echo "building userdata root image..."
+          ./unixnu build userdata -D "$UNIXNU_DEVICE" || {
+            echo "::error::userdata build failed"
+            exit 1
+          }
+          # Find the output
+          ROOT=$(ls -t out/shennong/*/shennong/userdata/userdata-root.img 2>/dev/null | head -1) || \
+          ROOT=$(ls -t out/shennong/userdata/userdata-root.img 2>/dev/null | head -1) || true
+          echo "root image: ${ROOT:-not found}"
+          [ -n "$ROOT" ] && ls -l "$ROOT" && sha256sum "$ROOT"
+
+      - name: Build payload
+        working-directory: unixnu
+        run: |
+          set -eu
+          echo "building payload..."
+          ./unixnu build payload -D "$UNIXNU_DEVICE" || {
+            echo "::error::payload build failed"
+            exit 1
+          }
+          PAY=$(ls -t out/shennong/*/shennong/payload/payload.img 2>/dev/null | head -1) || true
+          echo "payload: ${PAY:-not found}"
+          [ -n "$PAY" ] && ls -l "$PAY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shennong-stage-e
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            unixnu/out/shennong/**/kernel/kernel.macho*
+            unixnu/out/shennong/**/payload/payload.img
+            unixnu/out/shennong/**/userdata/userdata-root.img
+            unixnu/out/shennong/**/logs/*.log
