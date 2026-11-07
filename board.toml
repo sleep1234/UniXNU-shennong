@@ -6,22 +6,11 @@
 "name" = "shennong"
 "soc" = "SM8650"
 "description" = "Xiaomi 14 Pro 23116PN5BC"
-# The framework's storage builders look up package sources as kits/sheng (hard-coded in
-# build-sheng-source-storage.py and build-arm-driver.py); the kit name links this board's
-# package/ there. Sources that need the package resolve either name.
-"kit" = "sheng"
+"kit" = "shennong"
 "soc_source" = "sm8550"
-"os_profile" = "ios-27.0.1-24A446-iphone16pro"
+"os_profile" = "ipados-17.7.11-21H461"
 ["components"]
 "include" = ["ArmDTPlatform", "ArmCpu", "ShengUfs", "VirtioMmioBlock", "RamBlock", "VerifiedRoot", "XnuPrelink"]
-["root"]
-# The OS/SystemOS windows as they exist in the written root image: the source-storage
-# builder and the kernel's owner-root enforcement compare these against the policies.
-"os_volume_uuid" = "C3A4D926-411E-4365-9855-1B66A5CE0263"
-"systemos_volume_uuid" = "ECFE851C-29F1-40D4-86BD-13597F9A1EE8"
-"os_image_sha256" = "79179f6ebb37ff664415af13b2c3b9e900fe2f02460f8a7d14c72957c3eca095"
-"systemos_image_sha256" = "00a9955249a452ac1dd4b7f47f8a00f828f711b2dee4e8bc74e5183b29082f9b"
-
 ["userdata"]
 "first_lba" = 2260480
 "last_lba" = 64049146
@@ -33,35 +22,34 @@
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
   "build-libpthread-kernel.py",
+  "build-sheng-platform-power.py",
+  "build-mockfs-fixture.py",
   "component:ArmDTPlatform",
   "component:ArmCpu",
   "component:ShengUfs",
+  "build-verified-root.py",
+  "build-storage-bindings.py",
   "component:VirtioMmioBlock",
   "component:RamBlock",
-  "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446",
-  "build-fileset-release-reference.py --tree . --lto",
 ]
 "config_fragments" = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
-"patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu-12377/series", "os:patches/xnu/series"]
+"patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
 ["ipsw"]
-# iPadOS 27.0.1 userland (arm64e). The previous iPad7,1 / 17.7.11 profile is ordinary arm64,
-# which the source-storage root path refuses, so the whole owner-root and SystemOS mount
-# machinery was unreachable on it.
-"url" = "https://updates.cdn-apple.com/2026FallFCS/59ffd938-75b6-41e5-af04-f4295ee8aeb3/iPhone17,1_27.0.1_24A446_Restore.ipsw"
-"product" = "iPhone17,1"
-"version" = "27.0.1"
-"build" = "24A446"
-"device_class" = "d93ap"
-"chip_id" = 33088
+"url" = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+"product" = "iPad7,1"
+"version" = "17.7.11"
+"build" = "21H461"
+"device_class" = "j120ap"
+"chip_id" = 32785
 "board_id" = 12
 "fetch" = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
 
 ["kernel"."prelink"]
 "tool" = "kits/XnuPrelink/emit_prelink.py"
 "kernel" = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
-"kernelcache_sha256" = "fa07057bf34f33af1ec26681ad0c87c13e5aaa548a300740eddb0e92876e5f95"
+"kernelcache_sha256" = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
 "slide" = "-0x1000000"
-"extra_args" = ["--fileset-reference", "build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf", "--allow-missing"]
+"early_security_init" = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
 "roots" = ["com.apple.AppleFSCompression.AppleFSCompressionTypeZlib", "com.apple.driver.AppleARMPlatform", "com.apple.driver.AppleARMWatchdogTimer", "com.apple.driver.AppleAudioClockLibs", "com.apple.driver.AppleEffaceableStorage", "com.apple.driver.AppleIISController", "com.apple.driver.AppleM2ScalerCSCDriver", "com.apple.driver.AppleMobileFileIntegrity", "com.apple.driver.ApplePMGR", "com.apple.driver.IODARTFamily", "com.apple.filesystems.apfs", "com.apple.iokit.CoreAnalyticsFamily", "com.apple.iokit.IOAVFamily", "com.apple.iokit.IOAudio2Family", "com.apple.iokit.IOCECFamily", "com.apple.iokit.IOCryptoAcceleratorFamily", "com.apple.iokit.IOGPUFamily", "com.apple.iokit.IOHDCPFamily", "com.apple.iokit.IOMobileGraphicsFamily", "com.apple.iokit.IOReportFamily", "com.apple.iokit.IOSlowAdaptiveClockingFamily", "com.apple.iokit.IOStorageFamily", "com.apple.iokit.IOSurface", "com.apple.kec.Libm", "com.apple.kec.corecrypto", "com.apple.kext.AppleMatch", "com.apple.kext.CoreTrust", "com.apple.security.AppleImage4", "com.apple.security.sandbox", "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDEventDriver"]
 ["firmware"]
 "config" = "shennong"
@@ -84,8 +72,7 @@
 "dram_size" = "0x10000000"
 "panic_screen" = true
 "timeout" = 0
-"root_policies" = "{tree}/build/sheng-source-storage/root-policies.bin"
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "armcpu-diagnostics=1", "boot-progress=2", "sheng-pmgr=2", "native-ufs-probe=3", "native-source-storage=1"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "armcpu-diagnostics=1", "boot-progress=2", "sheng-pmgr=2", "native-ufs-probe=3"]
 ["payload"."adt"]
 "tool" = "scripts/make-shennong-adt.py"
 "owned_memory_size" = "0x10000000"
@@ -94,7 +81,7 @@
 # OS volume UUID of this OS profile (iPadOS 17.7.11 21H461). IOFindBSDRoot matches the
 # published IOMedia against this through the ADT's root-matching property; without it the
 # UFS windows are published but vfs_mountroot never selects one.
-"root_match_volume_uuid" = "C3A4D926-411E-4365-9855-1B66A5CE0263"
+"root_match_volume_uuid" = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 ["bootimg"]
 "dtb_node" = [{ "path" = "/reserved-memory/splash_region", "props" = [{ "name" = "label", "type" = "s", "value" = "cont_splash_region" }, { "name" = "reg", "type" = "x", "value" = ["0x0", "0xFC400000", "0x0", "0x2B00000"] }] }]
 ["device_tree"]
