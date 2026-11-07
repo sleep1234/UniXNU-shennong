@@ -1,0 +1,79 @@
+name: shennong userdata (root image only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  userdata:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      UNIXNU_DEVICE: ${{ github.workspace }}/device
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out UniXNU (pinned, iPadOS 17.7.11)
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: c740efb5b23e94453bb179f7801eb592baafacf6
+          path: unixnu
+          submodules: recursive
+      - name: Check out the device repository
+        uses: actions/checkout@v4
+        with:
+          path: device
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install host tools
+        run: |
+          brew install llvm lld mtools dtc
+          echo "$(brew --prefix bison 2>/dev/null || echo /opt/homebrew/opt/bison)/bin" >> "$GITHUB_PATH" || true
+          echo "$(brew --prefix flex 2>/dev/null || echo /opt/homebrew/opt/flex)/bin" >> "$GITHUB_PATH" || true
+      - name: Install board OS profile
+        run: |
+          mkdir -p unixnu/profiles/os
+          cp -r device/profiles/os/* unixnu/profiles/os/ 2>/dev/null || true
+          ls unixnu/profiles/os
+      - name: Fetch and tree
+        working-directory: unixnu
+        run: |
+          ./unixnu fetch -D "$UNIXNU_DEVICE"
+          ./unixnu defconfig shennong_defconfig -D "$UNIXNU_DEVICE"
+          ./unixnu tree -D "$UNIXNU_DEVICE"
+      - name: Download IPSW
+        working-directory: unixnu
+        run: |
+          IP=out/ipsw/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw
+          mkdir -p out/ipsw
+          if [ ! -f "$IP" ]; then
+            echo "downloading IPSW (6.84 GiB)..."
+            curl -sL --max-time 3600 -o "$IP" \
+              "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw" \
+              || { echo "::error::IPSW download failed"; exit 1; }
+          fi
+          ls -l "$IP"
+      - name: Build userdata root image
+        working-directory: unixnu
+        run: |
+          set -eu
+          echo "building userdata root image..."
+          ./unixnu build userdata -D "$UNIXNU_DEVICE" || {
+            echo "::error::userdata build failed"
+            # Best-effort: try to find any userdata output
+            find out/shennong -name "userdata-root.img" 2>/dev/null | xargs ls -la || true
+            exit 1
+          }
+          ROOT=$(find out/shennong -name "userdata-root.img" 2>/dev/null | head -1)
+          echo "root image: ${ROOT:-not found}"
+          [ -n "$ROOT" ] && ls -l "$ROOT" && sha256sum "$ROOT"
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shennong-userdata
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            unixnu/out/shennong/**/userdata/userdata-root.img
+            unixnu/out/shennong/**/logs/*.log
